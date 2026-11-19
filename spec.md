@@ -127,7 +127,7 @@ title ──클릭──▶ play ──버튼 맞힘──▶ clear (1.9초) ─
 | 3 | MIRROR | 72×30 | `move` = `(-dx, dy)` |
 | 4 | UPSIDE DOWN | 64×28 | `move` = `(-dx, -dy)` |
 | 5 | TWIN | 80×34 | `hit` = `(2·CX − vx, 2·CY − vy)` |
-| 6 | TURN | 96×38 | `setup`: s ∈ {+1, −1}. `move` = `(−dy·s, dx·s)` |
+| 6 | TILT | 96×38 | `setup`: r = ±45° (시계 또는 반시계 무작위). `move` = `(dx·cos r − dy·sin r, dx·sin r + dy·cos r)`. 90° 회전은 CHAOS와 FINAL의 모드에만 남음 |
 | 7 | TURBO | 64×30 | `move` = `(2.5dx, 2.5dy)` |
 | 8 | ECHO | 80×34 | 매 프레임 `{t, vx, vy}`를 기록. `display` = 450ms 전 위치 (기록이 그보다 짧으면 가장 오래된 위치). 판정은 현재 위치 |
 | 9 | GHOST | 80×34 | `btn`은 처음 위치에 고정되고 보이지 않음. 보이는 미끼 `ghost`는 처음에 `btn`과 같은 위치. 미끼 중심과 커서 거리 d < 110이면 커서 반대 방향으로 초당 300px 이동. 플레이 영역 안쪽 4px(아래는 8px) 경계에 막히고 d < 70이면, 커서와 반대쪽 구석(가장자리에서 40px)으로 순간이동. `btn` 자리에 옅은 빨간 점 3개가 1.2초 주기로 반짝임. `noMove` |

@@ -221,10 +221,10 @@ const LV = [
     place() { btn = randBtn(80, 34); },
     hit: () => [2 * CX - vx, 2 * CY - vy] },
 
-  { name: 'TURN', hint: 'THE WORLD TURNED 90 DEGREES.',
-    setup() { this.s = Math.random() < 0.5 ? 1 : -1; },
+  { name: 'TILT', hint: 'THE WORLD IS TILTED A LITTLE.',
+    setup() { this.r = (Math.random() < 0.5 ? 1 : -1) * Math.PI / 4; },   // 45 degrees, clockwise or counter-clockwise
     place() { btn = randBtn(96, 38); },
-    move(dx, dy) { return [-dy * this.s, dx * this.s]; } },
+    move(dx, dy) { const c = Math.cos(this.r), sn = Math.sin(this.r); return [dx * c - dy * sn, dx * sn + dy * c]; } },
 
   { name: 'TURBO', hint: 'TINY MOVES. TINY, TINY MOVES.',
     place() { btn = randBtn(64, 30); },
