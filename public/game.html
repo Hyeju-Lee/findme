@@ -25,9 +25,16 @@ const COLORS = ['#e83b3b', '#f7a531', '#f7e026', '#3bd46a', '#33b5e8', '#5b5bf0'
 
 // ---------- tuning ----------
 const MARKER_AFTER = 3;      // yellow X appears from this miss (per stage)
+const LIVES = 5;             // hearts per run
+const MISSES_PER_LIFE = 3;   // every this many misses costs one heart
 const AUTO_HINT_AFTER = 8;   // hint appears by itself after this many misses
 const HINT_PENALTY = 300;    // pressing H costs this many points
 const RELOCATE_EVERY = 10;   // button jumps elsewhere every N misses
+const MIN_START_DIST = 180;  // at stage start the cursor (and the real click point) is at least this far from the button
+const DRIFT_FROM = 7;        // buttons start drifting from this stage number
+const DRIFT_SPEED = 20;      // px/s at DRIFT_FROM ...
+const DRIFT_STEP = 6;        // ... plus this much per later stage
+const DRIFT_MAX = 60;        // but never faster than this
 
 // ---------- helpers ----------
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -150,6 +157,16 @@ function drawButton(r, pressed = false, color = '#e83b3b', base = '#5a0f0f', fac
   if (face) drawFace(r, r.y + 4 - d, face);
 }
 
+// pixel heart (1 = edge, 2 = fill)
+const HEART = [' 11 11 ', '1221221', '1222221', ' 12221 ', '  121  ', '   1   '];
+function drawHeart(x, y, full, s = 2) {
+  HEART.forEach((row, j) => [...row].forEach((ch, i) => {
+    if (ch === ' ') return;
+    ctx.fillStyle = full ? (ch === '1' ? '#8a1a1a' : '#e83b3b') : (ch === '1' ? '#333344' : '#1c1c28');
+    ctx.fillRect(x + i * s, y + j * s, s, s);
+  }));
+}
+
 // ---------- game state ----------
 let scene = 'title';          // title | play | clear | end
 let locked = false;
@@ -158,6 +175,7 @@ let misses = 0, levelMisses = 0, elapsed = 0;
 let btn = null, ghost = null, markers = [], hist = [];
 let clearT = 0, shakeT = 0, flashT = 0, movedT = 0, showHint = false;
 let rain = [];                // decorative falling blocks
+let lives = LIVES, lifeMisses = 0, lifeLostT = 0;
 let score = 0, stageTime = 0, moodT = 0, bubble = null, parts = [], popup = null;
 const store = {
   get() { try { return +(localStorage.getItem('findme-hi') || 0); } catch (e) { return 0; } },
@@ -186,10 +204,10 @@ const OFFSET_RULE = {
 
 const LV = [
   { ...OFFSET_RULE, name: 'PRACTICE', hint: 'THE YELLOW X IS WHERE YOUR CLICK REALLY LANDS.',
-    showHit: true, hintAtStart: true },             // warm-up: the real click point is always visible
+    showHit: true, hintAtStart: true },             // warm-up: the real click point is always visible,
 
   { ...OFFSET_RULE, name: 'OFFSET', hint: 'YOUR CLICK LANDS SOMEWHERE ELSE.',
-    markerAfter: 1, firstTaunt: 'WATCH THE X!' },   // same rule, now the X only shows after a miss
+    markerAfter: 1, firstTaunt: 'WATCH THE X!' },   // same rule, now the X only shows after a miss,
 
   { name: 'MIRROR', hint: 'LEFT IS RIGHT. RIGHT IS LEFT.',
     place() { btn = randBtn(72, 30); },
@@ -198,6 +216,19 @@ const LV = [
   { name: 'UPSIDE DOWN', hint: 'EVERYTHING GOES BACKWARDS.',
     place() { btn = randBtn(64, 28); },
     move: (dx, dy) => [-dx, -dy] },
+
+  { name: 'TWIN', hint: 'THE CENTER IS A MIRROR.',
+    place() { btn = randBtn(80, 34); },
+    hit: () => [2 * CX - vx, 2 * CY - vy] },
+
+  { name: 'TURN', hint: 'THE WORLD TURNED 90 DEGREES.',
+    setup() { this.s = Math.random() < 0.5 ? 1 : -1; },
+    place() { btn = randBtn(80, 34); },
+    move(dx, dy) { return [-dy * this.s, dx * this.s]; } },
+
+  { name: 'TURBO', hint: 'TINY MOVES. TINY, TINY MOVES.',
+    place() { btn = randBtn(56, 26); },
+    move: (dx, dy) => [dx * 3, dy * 3] },
 
   { name: 'ECHO', hint: 'YOU SEE THE PAST. MOVE, THEN WAIT.',
     setup() { hist = []; },
@@ -208,11 +239,7 @@ const LV = [
     },
     display: () => hist.length ? [hist[0].x, hist[0].y] : [vx, vy] },
 
-  { name: 'TURBO', hint: 'TINY MOVES. TINY, TINY MOVES.',
-    place() { btn = randBtn(56, 26); },
-    move: (dx, dy) => [dx * 3, dy * 3] },
-
-  { name: 'GHOST', hint: 'IT RAN AWAY... BUT WHERE DID IT START?', noMove: true,
+  { name: 'GHOST', hint: 'IT RAN AWAY... BUT WHERE DID IT START?', noMove: true, staticBtn: true,
     place() { btn = randBtn(80, 34); ghost = { ...btn }; },
     update(dt) {
       const g = ghost, cx = g.x + g.w / 2, cy = g.y + g.h / 2;
@@ -238,15 +265,6 @@ const LV = [
       }
       drawButton(ghost, false, undefined, undefined, face());
     } },
-
-  { name: 'TURN', hint: 'THE WORLD TURNED 90 DEGREES.',
-    setup() { this.s = Math.random() < 0.5 ? 1 : -1; },
-    place() { btn = randBtn(80, 34); },
-    move(dx, dy) { return [-dy * this.s, dx * this.s]; } },
-
-  { name: 'TWIN', hint: 'THE CENTER IS A MIRROR.',
-    place() { btn = randBtn(80, 34); },
-    hit: () => [2 * CX - vx, 2 * CY - vy] },
 
   { name: 'ORBIT', hint: 'YOUR CLICK CIRCLES AROUND YOU.',
     setup() { this.t0 = performance.now(); this.dir = Math.random() < 0.5 ? 1 : -1; },
@@ -276,24 +294,148 @@ const LV = [
     },
     drawTarget() { const f = face(); this.list.forEach(b => b.dead ? drawButton(b, true, '#333', '#111') : drawButton(b, false, undefined, undefined, f)); } },
 
+  { name: 'SWAP', hint: 'UP IS LEFT. LEFT IS UP.',
+    place() { btn = randBtn(64, 28); },
+    move: (dx, dy) => [dy, dx] },
+
+  { name: 'ICE', hint: 'IT SLIDES. PUSH GENTLY, THEN WAIT.',
+    setup() { this.v = [0, 0]; },
+    place() { btn = randBtn(72, 30); },
+    move(dx, dy) { this.v[0] += dx * 3; this.v[1] += dy * 3; return [0, 0]; },   // mouse pushes, it doesn't steer
+    update(dt) {
+      vx += this.v[0] * dt; vy += this.v[1] * dt;
+      if (vx < PF.x || vx > PF.x + PF.w - 1) { this.v[0] *= -0.5; vx = clamp(vx, PF.x, PF.x + PF.w - 1); }
+      if (vy < PF.y || vy > PF.y + PF.h - 1) { this.v[1] *= -0.5; vy = clamp(vy, PF.y, PF.y + PF.h - 1); }
+      const k = Math.exp(-2 * dt); this.v[0] *= k; this.v[1] *= k;
+    } },
+
+  { name: 'WIND', hint: 'THE WIND PUSHES YOU. PUSH BACK.',
+    setup() { this.t0 = performance.now(); this.k = -1; this.w = [0, 0]; },
+    place() { btn = randBtn(72, 30); },
+    update(dt, now) {
+      const k = Math.floor((now - this.t0) / 4000);
+      if (k !== this.k) {
+        this.k = k; const a = rnd(0, Math.PI * 2), sp = rnd(50, 80);
+        this.w = [Math.cos(a) * sp, Math.sin(a) * sp];
+        if (k > 0) beep(160, 0.2, 'triangle', 0.04, 120);
+      }
+      vx = clamp(vx + this.w[0] * dt, PF.x, PF.x + PF.w - 1);
+      vy = clamp(vy + this.w[1] * dt, PF.y, PF.y + PF.h - 1);
+    },
+    drawTarget(now) {
+      // wind streaks drifting across the field
+      const [wx, wy] = this.w, sp = Math.hypot(wx, wy) || 1;
+      ctx.fillStyle = 'rgba(180,220,255,.18)';
+      for (let i = 0; i < 14; i++) {
+        const t = ((now / 1000) * sp * 3 + i * 97) % (PF.w + PF.h);
+        const x = PF.x + ((i * 131 + t * wx / sp) % PF.w + PF.w) % PF.w, y = PF.y + ((i * 71 + t * wy / sp) % PF.h + PF.h) % PF.h;
+        for (let j = 0; j < 5; j++) ctx.fillRect(Math.round(x - wx / sp * j * 4), Math.round(y - wy / sp * j * 4), 2, 2);
+      }
+      drawButton(btn, false, undefined, undefined, face());
+    } },
+
+  { name: 'SHY', hint: 'IT HIDES WHEN YOU COME CLOSE. REMEMBER WHERE IT WAS.',
+    place() { btn = randBtn(80, 34); },
+    drawTarget() {
+      const [hx, hy] = hitPoint(), d = Math.hypot(btn.x + btn.w / 2 - hx, btn.y + btn.h / 2 - hy);
+      ctx.globalAlpha = clamp((d - 50) / 130, 0, 1);      // fully gone within 50px, fully visible beyond 180px
+      drawButton(btn, false, undefined, undefined, face());
+      ctx.globalAlpha = 1;
+    } },
+
+  { name: 'DEJA VU', hint: 'YOU SEE THE PAST. LEFT IS RIGHT.',
+    setup() { hist = []; },
+    place() { btn = randBtn(80, 34); },
+    move: (dx, dy) => [-dx, dy],
+    update(dt, now) {
+      hist.push({ t: now, x: vx, y: vy });
+      while (hist.length > 1 && hist[1].t <= now - 700) hist.shift();
+    },
+    display: () => hist.length ? [hist[0].x, hist[0].y] : [vx, vy] },
+
+  { name: 'ECLIPSE', hint: 'THE CENTER IS A MIRROR, AND IT SPINS.',
+    setup() { this.t0 = performance.now(); this.dir = Math.random() < 0.5 ? 1 : -1; },
+    place() { btn = randBtn(80, 34); },
+    hit() {
+      const a = (performance.now() - this.t0) / 7000 * Math.PI * 2 * this.dir;
+      return [2 * CX - vx + Math.cos(a) * 60, 2 * CY - vy + Math.sin(a) * 60];
+    } },
+
   { name: 'CHAOS', hint: 'THE RULES CHANGE EVERY 5 SECONDS.',
     setup() { this.t0 = performance.now(); this.seq = shuffle([0, 1, 2, 3]); this.k = -1; this.mode = 0; },
-    place() { btn = randBtn(72, 30); this.bv = [rnd(25, 45) * (Math.random() < .5 ? 1 : -1), rnd(20, 35) * (Math.random() < .5 ? 1 : -1)]; },
+    place() { btn = randBtn(72, 30); },
     update(dt, now) {
       const k = Math.floor((now - this.t0) / 5000);
       if (k !== this.k) {
         this.k = k; this.mode = this.seq[k % 4];
         if (k > 0) { flashT = now + 150; beep(220, 0.1, 'square', 0.04, 220); }
       }
-      btn.x += this.bv[0] * dt; btn.y += this.bv[1] * dt;
-      if (btn.x < PF.x + 20 || btn.x + btn.w > PF.x + PF.w - 20) this.bv[0] *= -1;
-      if (btn.y < PF.y + 20 || btn.y + btn.h > PF.y + PF.h - 30) this.bv[1] *= -1;
-      btn.x = clamp(btn.x, PF.x + 20, PF.x + PF.w - 20 - btn.w);
-      btn.y = clamp(btn.y, PF.y + 20, PF.y + PF.h - 30 - btn.h);
+    },
+    move(dx, dy) { return MODES[this.mode](dx, dy); } },
+
+  { name: 'FINAL', hint: 'EVERYTHING AT ONCE. GOOD LUCK.',
+    driftInset: 100,                                  // keep it away from the walls so the offset click can always reach it
+    setup() {
+      const a = rnd(0, Math.PI * 2), r = rnd(60, 80); this.o = [Math.cos(a) * r, Math.sin(a) * r];
+      this.t0 = performance.now(); this.seq = shuffle([0, 1, 2, 3]); this.k = -1; this.mode = 0;
+    },
+    place() { btn = randBtn(80, 34); },
+    hit() { return [vx + this.o[0], vy + this.o[1]]; },
+    update(dt, now) {
+      const k = Math.floor((now - this.t0) / 4000);
+      if (k !== this.k) {
+        this.k = k; this.mode = this.seq[k % 4];
+        if (k > 0) { flashT = now + 150; beep(220, 0.1, 'square', 0.04, 220); }
+      }
     },
     move(dx, dy) { return MODES[this.mode](dx, dy); } },
 ];
 const L = () => LV[li];
+
+// distance from the button to the cursor or the real click point, whichever is closer
+function startDist() {
+  const cx = btn.x + btn.w / 2, cy = btn.y + btn.h / 2, [hx, hy] = hitPoint();
+  return Math.min(Math.hypot(cx - vx, cy - vy), Math.hypot(cx - hx, cy - hy));
+}
+
+// Stage start: place the button, then start the cursor somewhere far from it,
+// so a stage never opens with the cursor (or the real click point) next to the button.
+function placeStart() {
+  L().place();
+  let best = [vx, vy], bestD = -1;
+  for (let k = 0; k < 100; k++) {
+    vx = rnd(PF.x + 30, PF.x + PF.w - 30); vy = rnd(PF.y + 30, PF.y + PF.h - 30);
+    const d = startDist();
+    if (d >= MIN_START_DIST) return;
+    if (d > bestD) { bestD = d; best = [vx, vy]; }
+  }
+  [vx, vy] = best;
+}
+
+// Relocation after misses: the cursor stays put, so try to put the button away from it.
+function placeFar() {
+  for (let k = 0; k < 60; k++) { L().place(); if (startDist() >= MIN_START_DIST) return; }
+}
+
+// From DRIFT_FROM on, buttons slowly drift and bounce inside the playfield.
+const drifting = () => li >= DRIFT_FROM - 1 && !L().staticBtn;
+const driftButtons = () => L().list ? L().list : [btn];
+function startDrift() {
+  if (!drifting()) return;
+  const sp = Math.min(DRIFT_MAX, DRIFT_SPEED + (li - (DRIFT_FROM - 1)) * DRIFT_STEP);
+  driftButtons().forEach(b => { const a = rnd(0, Math.PI * 2); b.vx = Math.cos(a) * sp; b.vy = Math.sin(a) * sp; });
+}
+function drift(dt) {
+  if (!drifting()) return;
+  driftButtons().forEach(b => {
+    if (b.dead || b.vx === undefined) return;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    const m = L().driftInset || 20;                 // gap kept from the walls
+    const x0 = PF.x + m, x1 = PF.x + PF.w - m - b.w, y0 = PF.y + m, y1 = PF.y + PF.h - m - 10 - b.h;
+    if (b.x < x0 || b.x > x1) { b.vx *= -1; b.x = clamp(b.x, x0, x1); }
+    if (b.y < y0 || b.y > y1) { b.vy *= -1; b.y = clamp(b.y, y0, y1); }
+  });
+}
 
 function startLevel(i) {
   li = i; levelMisses = 0; showHint = false; markers = []; ghost = null; movedT = 0;
@@ -302,11 +444,23 @@ function startLevel(i) {
   if (L().setup) L().setup();
   rollCursor();
   if (L().hintAtStart) showHint = true;
-  L().place();
+  placeStart();
+  startDrift();
   scene = 'play';
   jingle([523, 659, 784], 70);
 }
-function startGame() { misses = 0; elapsed = 0; score = 0; newRecord = false; parts = []; startLevel(0); }
+function startGame() {
+  misses = 0; elapsed = 0; score = 0; newRecord = false; parts = [];
+  lives = LIVES; lifeMisses = 0; lifeLostT = 0;
+  startLevel(0);
+}
+
+// out of hearts: the run is over and the next click starts again from stage 1
+function gameOver() {
+  scene = 'gameover'; bubble = null; markers = []; showHint = false;
+  if (score > hi) { hi = score; newRecord = true; store.set(hi); }
+  jingle([523, 392, 330, 262, 196], 170);
+}
 
 function shatter(r) {
   for (let x = 0; x < r.w; x += 8) for (let y = 0; y < r.h; y += 8)
@@ -350,8 +504,14 @@ function miss(x, y) {
   bubble.t = now + 1000; bubble.anchor = a;
   if (levelMisses >= AUTO_HINT_AFTER) showHint = true;
   if (!L().noMove && levelMisses % RELOCATE_EVERY === 0) {
-    L().place(); rollCursor(); movedT = now + 1200; bubble = null;
+    placeFar(); startDrift(); rollCursor(); movedT = now + 1200; bubble = null;
     beep(1200, 0.08, 'square', 0.03, -600);
+  }
+  lifeMisses++;
+  if (lifeMisses >= MISSES_PER_LIFE) {
+    lifeMisses = 0; lives--; lifeLostT = now + 900; shakeT = now + 300;
+    setTimeout(() => beep(330, 0.3, 'square', 0.05, -250), 120);
+    if (lives <= 0) gameOver();
   }
 }
 
@@ -363,7 +523,7 @@ let freeMode = false;
 const active = () => locked || freeMode;
 function setFree(on) {
   freeMode = on;
-  document.body.style.cursor = on ? 'none' : '';
+  cv.style.cursor = on ? 'none' : '';     // hide the system cursor only over the game
 }
 function lockRefused() {
   if (locked || freeMode) return;
@@ -378,17 +538,20 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('pointerlockerror', lockRefused);
 addEventListener('blur', () => { if (freeMode) setFree(false); });   // pause when the window loses focus
 
-document.addEventListener('mousedown', () => {
+document.addEventListener('mousedown', e => {
   if (!ac) beep(1, 0.001, 'sine', 0.0001);          // unlock audio
   if (!active()) {
+    if (e.target !== cv) return;                    // only clicks on the game start or resume it
     let req;
     try { req = cv.requestPointerLock(); } catch (e) { lockRefused(); }
     if (req && req.catch) req.catch(lockRefused);
     if (scene === 'title') startGame();
     return;                                         // a resume click never counts
   }
+  if (freeMode && e.target !== cv) return;          // clicks outside the game don't count
   if (scene === 'title') { startGame(); return; }
   if (scene === 'end') { scene = 'title'; return; }
+  if (scene === 'gameover') { startGame(); return; }
   if (scene !== 'play') return;
   const lv = L();
   const [hx, hy] = lv.hit ? lv.hit() : [vx, vy];
@@ -398,6 +561,7 @@ document.addEventListener('mousedown', () => {
 
 document.addEventListener('mousemove', e => {
   if (!active() || scene !== 'play') return;
+  if (freeMode && e.target !== cv) return;          // pointer outside the game: the game cursor stays put
   const s = cv.getBoundingClientRect().width / W;
   let dx = e.movementX / s, dy = e.movementY / s;
   if (L().move) [dx, dy] = L().move(dx, dy);
@@ -417,6 +581,7 @@ function update(dt, now) {
   if (scene === 'play' && active()) {
     elapsed += dt; stageTime += dt;
     if (L().update) L().update(dt, now);
+    drift(dt);
   }
   parts.forEach(p => { p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; });
   parts = parts.filter(p => p.y < H + 16);
@@ -428,7 +593,7 @@ function update(dt, now) {
       jingle([523, 659, 784, 1047, 784, 1047, 1319], 120);
     }
   }
-  if (scene === 'title' || scene === 'end') {
+  if (scene === 'title' || scene === 'end' || scene === 'gameover') {
     if (Math.random() < 0.15) rain.push({ x: Math.floor(Math.random() * 40) * 16, y: -16, c: COLORS[Math.floor(Math.random() * COLORS.length)], v: 60 + Math.random() * 120 });
     rain.forEach(b => b.y += b.v * dt);
     rain = rain.filter(b => b.y < H);
@@ -462,7 +627,7 @@ function draw(now) {
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
   if (now < shakeT) ctx.translate((Math.random() - .5) * 8, (Math.random() - .5) * 8);
 
-  if (scene === 'title' || scene === 'end') {
+  if (scene === 'title' || scene === 'end' || scene === 'gameover') {
     rain.forEach(b => block(b.x, Math.floor(b.y / 4) * 4, 16, b.c));
     ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(60, 110, 520, 270);
     const blink = Math.floor(now / 500) % 2 === 0;
@@ -473,10 +638,11 @@ function draw(now) {
       text('ESC: PAUSE   H: HINT (-' + HINT_PENALTY + ' PTS)', W / 2, 275, 10, '#aaa', 'center');
       text('HI-SCORE ' + String(hi).padStart(6, '0'), W / 2, 300, 10, '#f7a531', 'center');
       if (blink) text('CLICK TO START', W / 2, 335, 16, '#3bd46a', 'center');
+      text(LIVES + ' LIVES. EVERY ' + MISSES_PER_LIFE + ' MISSES COSTS ONE.', W / 2, 362, 8, '#e83b3b', 'center');
       // mascot button peeking from the corner, watching the mouse-less void
       drawButton(mkBtn(284, 400, 72, 30), false, undefined, undefined,
         { look: [320 + Math.cos(now / 600) * 50, 415 + Math.sin(now / 900) * 50], mood: Math.floor(now / 2500) % 4 === 3 ? 'smug' : 'normal' });
-    } else {
+    } else if (scene === 'end') {
       const n = LV.length, rank = score >= n * 4000 / 3 ? 'S' : score >= n * 11000 / 12 ? 'A' : score >= n * 7000 / 12 ? 'B' : 'C';
       text('ALL CLEAR!', W / 2, 125, 32, '#f7e026', 'center');
       text('SCORE ' + String(score).padStart(6, '0'), W / 2, 180, 14, '#fff', 'center');
@@ -485,16 +651,34 @@ function draw(now) {
       if (newRecord) { if (blink) text('NEW RECORD!', W / 2, 285, 14, '#f7a531', 'center'); }
       else text('HI-SCORE ' + String(hi).padStart(6, '0'), W / 2, 285, 10, '#f7a531', 'center');
       if (blink) text('CLICK TO PLAY AGAIN', W / 2, 335, 14, '#3bd46a', 'center');
+    } else {
+      text('GAME OVER', W / 2, 125, 32, '#e83b3b', 'center');
+      text('REACHED STAGE ' + (li + 1) + '/' + LV.length + '  ' + L().name, W / 2, 178, 10, '#fff', 'center');
+      text('SCORE ' + String(score).padStart(6, '0') + '   MISS ' + misses, W / 2, 202, 10, '#aaa', 'center');
+      for (let i = 0; i < LIVES; i++) drawHeart(W / 2 - LIVES * 9 + i * 18, 228, false);
+      if (newRecord) { if (blink) text('NEW RECORD!', W / 2, 270, 14, '#f7a531', 'center'); }
+      else text('HI-SCORE ' + String(hi).padStart(6, '0'), W / 2, 270, 10, '#f7a531', 'center');
+      if (blink) text('CLICK TO START OVER', W / 2, 335, 14, '#3bd46a', 'center');
     }
     ctx.restore();
     return;
   }
 
   // HUD
-  text('STAGE ' + String(li + 1).padStart(2, '0') + '/' + LV.length, 16, 22, 12, '#f7e026');
-  text(L().name, 200, 22, 12, '#33b5e8');
-  text('SC ' + String(score).padStart(6, '0'), 370, 22, 12, '#e83b3b');
-  text(fmtTime(elapsed), 624, 22, 12, '#fff', 'right');
+  text('STAGE ' + String(li + 1).padStart(2, '0') + '/' + LV.length, 16, 10, 12, '#f7e026');
+  text(L().name, 200, 10, 12, '#33b5e8');
+  text('SC ' + String(score).padStart(6, '0'), 370, 10, 12, '#e83b3b');
+  text(fmtTime(elapsed), 624, 10, 12, '#fff', 'right');
+  for (let i = 0; i < LIVES; i++) {
+    let full = i < lives;
+    if (i === lives && now < lifeLostT) full = Math.floor(now / 90) % 2 === 0;                          // the heart just lost flickers out
+    if (i === lives - 1 && lifeMisses === MISSES_PER_LIFE - 1 && Math.floor(now / 250) % 2) full = false; // next one to go blinks
+    drawHeart(16 + i * 18, 30, full);
+  }
+  for (let k = 0; k < MISSES_PER_LIFE; k++) {                                                            // misses toward the next lost heart
+    ctx.fillStyle = k < lifeMisses ? '#f7a531' : '#333344';
+    ctx.fillRect(16 + LIVES * 18 + 6 + k * 10, 34, 6, 6);
+  }
 
   drawFrame();
 
@@ -542,6 +726,7 @@ function draw(now) {
 
   if (now < flashT) { ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(PF.x, PF.y, PF.w, PF.h); }
   if (now < movedT && scene === 'play') text('IT MOVED!', W / 2, PF.y + 16, 10, '#f7a531', 'center');
+  if (now < lifeLostT && scene === 'play') text('OUCH! -1 LIFE', W / 2, PF.y + 46, 12, '#e83b3b', 'center');
   if (showHint && scene === 'play') text('HINT: ' + L().hint, W / 2, PF.y + PF.h - 28, 8, '#3bd46a', 'center');
   if (now < lockFailT && freeMode && scene === 'play') text('FREE MODE - MOUSE LOCK IS BLOCKED HERE', W / 2, PF.y + 30, 8, '#f7a531', 'center');
 
