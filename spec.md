@@ -1,4 +1,4 @@
-# FIND ME — 구현 스펙
+# CLICK ME — 구현 스펙
 
 이 문서는 게임이 **어떻게** 동작하는지 정확히 정의합니다. 왜 이렇게 만드는지는 [PRODUCT.md](PRODUCT.md)를 보세요.
 구현 파일은 [public/game.html](public/game.html) 하나입니다. 이 문서와 코드가 다르면 둘 중 하나를 고쳐 맞춥니다.

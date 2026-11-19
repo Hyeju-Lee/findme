@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>FIND ME</title>
+<title>CLICK ME</title>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
@@ -632,7 +632,7 @@ function draw(now) {
     ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(60, 110, 520, 270);
     const blink = Math.floor(now / 500) % 2 === 0;
     if (scene === 'title') {
-      text('FIND ME', W / 2, 140, 48, '#f7e026', 'center');
+      text('CLICK ME', W / 2, 140, 48, '#f7e026', 'center');
       text('CLICK THE BUTTON. IF YOU CAN.', W / 2, 220, 12, '#fff', 'center');
       text(LV.length + ' STAGES - ' + LV.length + ' BROKEN MICE', W / 2, 250, 10, '#33b5e8', 'center');
       text('ESC: PAUSE   H: HINT (-' + HINT_PENALTY + ' PTS)', W / 2, 275, 10, '#aaa', 'center');
