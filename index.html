@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>FIND ME</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { image-rendering: pixelated; box-shadow: 0 0 60px rgba(80, 255, 160, .25); border-radius: 6px; }
+  #scan { pointer-events: none; position: absolute; inset: 0;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.28) 2px 3px); }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="640" height="480"></canvas></div>
+<div id="scan"></div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = 640, H = 480;
+const FONT = '"Press Start 2P", monospace';
+const PF = { x: 32, y: 64, w: 576, h: 384 };           // playfield
+const CX = PF.x + PF.w / 2, CY = PF.y + PF.h / 2;      // playfield center
+const COLORS = ['#e83b3b', '#f7a531', '#f7e026', '#3bd46a', '#33b5e8', '#5b5bf0', '#c04de8'];
+
+// ---------- tuning ----------
+const MARKER_AFTER = 3;      // yellow X appears from this miss (per stage)
+const AUTO_HINT_AFTER = 8;   // hint appears by itself after this many misses
+const HINT_PENALTY = 300;    // pressing H costs this many points
+const RELOCATE_EVERY = 6;    // button jumps elsewhere every N misses
+
+// ---------- helpers ----------
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rnd = (a, b) => a + Math.random() * (b - a);
+const inRect = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+const mkBtn = (x, y, w, h) => ({ x, y, w, h });
+const randBtn = (w, h, m = 110) => mkBtn(
+  Math.round(rnd(PF.x + m, PF.x + PF.w - m - w)),
+  Math.round(rnd(PF.y + m * 0.8, PF.y + PF.h - m * 0.8 - h)), w, h);
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H) * 0.95;
+  cv.style.width = W * s + 'px';
+  cv.style.height = H * s + 'px';
+}
+addEventListener('resize', fit); fit();
+
+let ac;
+function beep(f, d = 0.08, type = 'square', vol = 0.05, slide = 0) {
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+  const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f, t);
+  if (slide) o.frequency.linearRampToValueAtTime(Math.max(20, f + slide), t + d);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g).connect(ac.destination);
+  o.start(t); o.stop(t + d);
+}
+const jingle = (notes, gap = 90) => notes.forEach((n, i) => setTimeout(() => beep(n, 0.12), i * gap));
+
+function text(s, x, y, size = 12, color = '#fff', align = 'left') {
+  ctx.font = size + 'px ' + FONT;
+  ctx.textAlign = align; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#000'; ctx.fillText(s, x + 2, y + 2);
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+
+function block(x, y, s, c) {
+  ctx.fillStyle = c; ctx.fillRect(x, y, s, s);
+  ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.fillRect(x, y, s, 3); ctx.fillRect(x, y, 3, s);
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(x, y + s - 3, s, 3); ctx.fillRect(x + s - 3, y, 3, s);
+}
+
+// pixel arrow cursor (1 = outline, 2 = fill)
+const ARROW = [
+  '1', '11', '121', '1221', '12221', '122221', '1222221', '12222221',
+  '122211111', '1221221', '121 1221', '11  1221', '     11'];
+function drawCursor(x, y) {
+  const p = 2;
+  ARROW.forEach((row, j) => [...row].forEach((ch, i) => {
+    if (ch === ' ') return;
+    ctx.fillStyle = ch === '1' ? '#000' : '#fff';
+    ctx.fillRect(Math.round(x) + i * p, Math.round(y) + j * p, p, p);
+  }));
+}
+
+// The button's eyes look at where the click would REALLY land (a sneaky clue).
+function drawFace(r, top, f) {
+  const s = r.h < 24 ? 1 : 2;
+  const ey = top + Math.round(r.h * 0.28);
+  const ex = [r.x + Math.round(r.w * 0.32), r.x + Math.round(r.w * 0.68)];
+  ctx.fillStyle = '#000';
+  ex.forEach(x => {
+    if (f.mood === 'smug') {                          // ^ ^
+      ctx.fillRect(x - 2 * s, ey + 2 * s, s, s); ctx.fillRect(x - s, ey + s, s, s); ctx.fillRect(x, ey, s, s);
+      ctx.fillRect(x + s, ey + s, s, s); ctx.fillRect(x + 2 * s, ey + 2 * s, s, s);
+    } else {
+      ctx.fillStyle = '#fff'; ctx.fillRect(x - 2 * s, ey, 4 * s, 4 * s);
+      const cx = r.x + r.w / 2, cy = top + r.h / 2, dx = f.look[0] - cx, dy = f.look[1] - cy, d = Math.hypot(dx, dy) || 1;
+      const px = Math.round(dx / d * s), py = Math.round(dy / d * s);
+      ctx.fillStyle = '#000'; ctx.fillRect(x - s + px, ey + s + py, 2 * s, 2 * s);
+    }
+  });
+  const my = top + Math.round(r.h * 0.7), mx = Math.round(r.x + r.w / 2);
+  ctx.fillStyle = '#000';
+  if (f.mood === 'smug') {
+    ctx.fillRect(mx - 4 * s, my - s, s, s); ctx.fillRect(mx + 3 * s, my - s, s, s); ctx.fillRect(mx - 3 * s, my, 6 * s, s);
+  } else ctx.fillRect(mx - 2 * s, my, 4 * s, s);
+}
+
+function drawButton(r, pressed = false, color = '#e83b3b', base = '#5a0f0f', face = null) {
+  const d = pressed ? 0 : 4;
+  ctx.fillStyle = base; ctx.fillRect(r.x, r.y + 4, r.w, r.h);
+  ctx.fillStyle = pressed ? '#ff7a3b' : color; ctx.fillRect(r.x, r.y + 4 - d, r.w, r.h);
+  ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(r.x, r.y + 4 - d, r.w, 3); ctx.fillRect(r.x, r.y + 4 - d, 3, r.h);
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(r.x, r.y + r.h + 1 - d, r.w, 3); ctx.fillRect(r.x + r.w - 3, r.y + 4 - d, 3, r.h);
+  if (face) drawFace(r, r.y + 4 - d, face);
+}
+
+// ---------- game state ----------
+let scene = 'title';          // title | play | clear | end
+let locked = false;
+let li = 0, vx = 0, vy = 0;
+let misses = 0, levelMisses = 0, elapsed = 0;
+let btn = null, ghost = null, markers = [], hist = [];
+let clearT = 0, shakeT = 0, flashT = 0, movedT = 0, showHint = false;
+let rain = [];                // decorative falling blocks
+let score = 0, stageTime = 0, moodT = 0, bubble = null, parts = [], popup = null;
+const store = {
+  get() { try { return +(localStorage.getItem('findme-hi') || 0); } catch (e) { return 0; } },
+  set(v) { try { localStorage.setItem('findme-hi', v); } catch (e) { /* storage unavailable */ } },
+};
+let hi = store.get(), newRecord = false;
+
+const TAUNTS = ['NOPE!', 'MISSED ME!', 'HA HA HA', 'NOT EVEN CLOSE', 'TRY HARDER', 'ZZZ...', 'WRONG WAY!', 'BOO!', 'YAWN...'];
+const hitPoint = () => L().hit ? L().hit() : [vx, vy];
+const face = () => ({ look: hitPoint(), mood: performance.now() < moodT ? 'smug' : 'normal' });
+
+const MODES = [
+  (dx, dy) => [dx, dy],
+  (dx, dy) => [-dx, dy],
+  (dx, dy) => [-dx, -dy],
+  (dx, dy) => [-dy, dx],
+];
+
+const LV = [
+  { name: 'OFFSET', hint: 'YOUR CLICK LANDS SOMEWHERE ELSE.',
+    setup() { const a = rnd(0, Math.PI * 2), r = rnd(70, 100); this.o = [Math.cos(a) * r, Math.sin(a) * r]; },
+    place() { btn = randBtn(80, 34); },
+    hit() { return [vx + this.o[0], vy + this.o[1]]; } },
+
+  { name: 'MIRROR', hint: 'LEFT IS RIGHT. RIGHT IS LEFT.',
+    place() { btn = randBtn(72, 30); },
+    move: (dx, dy) => [-dx, dy] },
+
+  { name: 'UPSIDE DOWN', hint: 'EVERYTHING GOES BACKWARDS.',
+    place() { btn = randBtn(64, 28); },
+    move: (dx, dy) => [-dx, -dy] },
+
+  { name: 'ECHO', hint: 'YOU SEE THE PAST. MOVE, THEN WAIT.',
+    setup() { hist = []; },
+    place() { btn = randBtn(64, 28); },
+    update(dt, now) {
+      hist.push({ t: now, x: vx, y: vy });
+      while (hist.length > 1 && hist[1].t <= now - 1200) hist.shift();
+    },
+    display: () => hist.length ? [hist[0].x, hist[0].y] : [vx, vy] },
+
+  { name: 'TURBO', hint: 'TINY MOVES. TINY, TINY MOVES.',
+    place() { btn = randBtn(36, 18); },
+    move: (dx, dy) => [dx * 5, dy * 5] },
+
+  { name: 'GHOST', hint: 'IT RAN AWAY... BUT WHERE DID IT START?', noMove: true,
+    place() { btn = randBtn(72, 30); ghost = { ...btn }; },
+    update(dt) {
+      const g = ghost, cx = g.x + g.w / 2, cy = g.y + g.h / 2;
+      const dx = cx - vx, dy = cy - vy, d = Math.hypot(dx, dy) || 1;
+      if (d < 140) {
+        const sp = 460 * dt;
+        g.x += dx / d * sp; g.y += dy / d * sp;
+        const nx = clamp(g.x, PF.x + 4, PF.x + PF.w - g.w - 4), ny = clamp(g.y, PF.y + 4, PF.y + PF.h - g.h - 8);
+        if ((nx !== g.x || ny !== g.y) && d < 70) {          // cornered -> teleport
+          g.x = vx < W / 2 ? PF.x + PF.w - g.w - 40 : PF.x + 40;
+          g.y = vy < H / 2 ? PF.y + PF.h - g.h - 40 : PF.y + 40;
+          beep(900, 0.06, 'square', 0.03, 400);
+        } else { g.x = nx; g.y = ny; }
+      }
+    },
+    drawTarget() { drawButton(ghost, false, undefined, undefined, face()); } },
+
+  { name: 'TURN', hint: 'THE WORLD TURNED 90 DEGREES.',
+    setup() { this.s = Math.random() < 0.5 ? 1 : -1; },
+    place() { btn = randBtn(64, 28); },
+    move(dx, dy) { return [-dy * this.s, dx * this.s]; } },
+
+  { name: 'TWIN', hint: 'THE CENTER IS A MIRROR.',
+    place() { btn = randBtn(64, 28); },
+    hit: () => [2 * CX - vx, 2 * CY - vy] },
+
+  { name: 'ORBIT', hint: 'YOUR CLICK CIRCLES AROUND YOU.',
+    setup() { this.t0 = performance.now(); this.dir = Math.random() < 0.5 ? 1 : -1; },
+    place() { btn = randBtn(72, 30); },
+    hit() {
+      const a = (performance.now() - this.t0) / 5000 * Math.PI * 2 * this.dir;
+      return [vx + Math.cos(a) * 90, vy + Math.sin(a) * 90];
+    } },
+
+  { name: 'BLACKOUT', hint: 'THE LIGHTS FLASH. LEFT IS RIGHT.',
+    place() { btn = randBtn(72, 30); },
+    move: (dx, dy) => [-dx, dy],
+    display: (now) => (now % 1500) < 150 ? [vx, vy] : null },
+
+  { name: 'WHICH ONE', hint: 'ONLY ONE IS REAL. THE CENTER IS A MIRROR.', noMove: true,
+    place() {
+      this.list = [];
+      for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++)
+        this.list.push({ ...mkBtn(Math.round(PF.x + 60 + c * 170 + rnd(-20, 20)), Math.round(PF.y + 70 + r * 170 + rnd(-20, 20)), 80, 34), dead: false });
+      btn = this.list[Math.floor(Math.random() * 6)];
+    },
+    hit: () => [2 * CX - vx, 2 * CY - vy],
+    test(hx, hy) {
+      const b = this.list.find(b => !b.dead && inRect(hx, hy, b));
+      if (b && b !== btn) { b.dead = true; beep(300, 0.2, 'square', 0.04, -200); }
+      return b === btn;
+    },
+    drawTarget() { const f = face(); this.list.forEach(b => b.dead ? drawButton(b, true, '#333', '#111') : drawButton(b, false, undefined, undefined, f)); } },
+
+  { name: 'CHAOS', hint: 'THE RULES CHANGE EVERY 3 SECONDS.',
+    setup() { this.t0 = performance.now(); this.seq = shuffle([0, 1, 2, 3]); this.k = -1; this.mode = 0; },
+    place() { btn = randBtn(60, 26); this.bv = [rnd(40, 70) * (Math.random() < .5 ? 1 : -1), rnd(30, 50) * (Math.random() < .5 ? 1 : -1)]; },
+    update(dt, now) {
+      const k = Math.floor((now - this.t0) / 3000);
+      if (k !== this.k) {
+        this.k = k; this.mode = this.seq[k % 4];
+        if (k > 0) { flashT = now + 150; beep(220, 0.1, 'square', 0.04, 220); }
+      }
+      btn.x += this.bv[0] * dt; btn.y += this.bv[1] * dt;
+      if (btn.x < PF.x + 20 || btn.x + btn.w > PF.x + PF.w - 20) this.bv[0] *= -1;
+      if (btn.y < PF.y + 20 || btn.y + btn.h > PF.y + PF.h - 30) this.bv[1] *= -1;
+      btn.x = clamp(btn.x, PF.x + 20, PF.x + PF.w - 20 - btn.w);
+      btn.y = clamp(btn.y, PF.y + 20, PF.y + PF.h - 30 - btn.h);
+    },
+    move(dx, dy) { return MODES[this.mode](dx, dy); } },
+];
+const L = () => LV[li];
+
+function startLevel(i) {
+  li = i; levelMisses = 0; showHint = false; markers = []; ghost = null; movedT = 0;
+  stageTime = 0; bubble = null; moodT = 0; popup = null;
+  vx = CX; vy = CY + 40;
+  if (L().setup) L().setup();
+  L().place();
+  scene = 'play';
+  jingle([523, 659, 784], 70);
+}
+function startGame() { misses = 0; elapsed = 0; score = 0; newRecord = false; parts = []; startLevel(0); }
+
+function shatter(r) {
+  for (let x = 0; x < r.w; x += 8) for (let y = 0; y < r.h; y += 8)
+    parts.push({ x: r.x + x, y: r.y + y, vx: rnd(-240, 240), vy: rnd(-420, -140),
+      c: Math.random() < .5 ? '#e83b3b' : COLORS[Math.floor(rnd(0, 7))], s: Math.random() < .3 ? 4 : 8 });
+}
+
+function win() {
+  scene = 'clear'; clearT = performance.now() + 1900;
+  const base = Math.max(100, 1000 - levelMisses * 60);
+  const timeBonus = Math.max(0, Math.round(500 - stageTime * 10));
+  const perfect = levelMisses === 0 ? 500 : 0;
+  const gain = base + timeBonus + perfect;
+  score += gain;
+  popup = { gain, perfect: perfect > 0 };
+  shatter(btn); bubble = null; flashT = performance.now() + 100;
+  jingle(perfect ? [784, 988, 1175, 1568, 1976] : [659, 784, 1047, 1319], 100);
+}
+
+// where the taunt bubble sits, and which button "warm/cold" is measured against
+function bubbleAnchor(hx, hy) {
+  const lv = L();
+  if (lv.list) {
+    const live = lv.list.filter(b => !b.dead);
+    return live.reduce((a, b) => Math.hypot(b.x + b.w / 2 - hx, b.y + b.h / 2 - hy) < Math.hypot(a.x + a.w / 2 - hx, a.y + a.h / 2 - hy) ? b : a, live[0]);
+  }
+  return btn;
+}
+
+function miss(x, y) {
+  misses++; levelMisses++;
+  const now = performance.now();
+  if (levelMisses >= MARKER_AFTER) markers.push({ x, y, t: now });
+  shakeT = now + 150; moodT = now + 900;
+  beep(140, 0.15, 'sawtooth', 0.05, -60);
+  const a = bubbleAnchor(x, y), d = Math.hypot(a.x + a.w / 2 - x, a.y + a.h / 2 - y);
+  bubble = d < 60 ? { s: 'SO CLOSE!', c: '#e83b3b' }
+         : d < 140 ? { s: 'WARM...', c: '#f7a531' }
+         : { s: TAUNTS[Math.floor(Math.random() * TAUNTS.length)], c: '#5b5bf0' };
+  bubble.t = now + 1000; bubble.anchor = a;
+  if (levelMisses >= AUTO_HINT_AFTER) showHint = true;
+  if (!L().noMove && levelMisses % RELOCATE_EVERY === 0) {
+    L().place(); movedT = now + 1200; bubble = null;
+    beep(1200, 0.08, 'square', 0.03, -600);
+  }
+}
+
+// ---------- input ----------
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === cv; });
+
+cv.addEventListener('mousedown', () => {
+  if (!ac) beep(1, 0.001, 'sine', 0.0001);          // unlock audio
+  if (!locked) {
+    cv.requestPointerLock();
+    if (scene === 'title') startGame();
+    return;                                         // a resume click never counts
+  }
+  if (scene === 'title') { startGame(); return; }
+  if (scene === 'end') { scene = 'title'; return; }
+  if (scene !== 'play') return;
+  const lv = L();
+  const [hx, hy] = lv.hit ? lv.hit() : [vx, vy];
+  const ok = lv.test ? lv.test(hx, hy) : inRect(hx, hy, btn);
+  if (ok) win(); else miss(hx, hy);
+});
+
+document.addEventListener('mousemove', e => {
+  if (!locked || scene !== 'play') return;
+  const s = cv.getBoundingClientRect().width / W;
+  let dx = e.movementX / s, dy = e.movementY / s;
+  if (L().move) [dx, dy] = L().move(dx, dy);
+  vx = clamp(vx + dx, PF.x, PF.x + PF.w - 1);
+  vy = clamp(vy + dy, PF.y, PF.y + PF.h - 1);
+});
+
+document.addEventListener('keydown', e => {
+  if ((e.key === 'h' || e.key === 'H') && scene === 'play' && !showHint) {
+    showHint = true; score = Math.max(0, score - HINT_PENALTY); beep(880, 0.05);
+  }
+});
+
+// ---------- loop ----------
+function update(dt, now) {
+  if (scene === 'play' && locked) {
+    elapsed += dt; stageTime += dt;
+    if (L().update) L().update(dt, now);
+  }
+  parts.forEach(p => { p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; });
+  parts = parts.filter(p => p.y < H + 16);
+  if (scene === 'clear' && now > clearT) {
+    if (li + 1 < LV.length) startLevel(li + 1);
+    else {
+      scene = 'end';
+      if (score > hi) { hi = score; newRecord = true; store.set(hi); }
+      jingle([523, 659, 784, 1047, 784, 1047, 1319], 120);
+    }
+  }
+  if (scene === 'title' || scene === 'end') {
+    if (Math.random() < 0.15) rain.push({ x: Math.floor(Math.random() * 40) * 16, y: -16, c: COLORS[Math.floor(Math.random() * COLORS.length)], v: 60 + Math.random() * 120 });
+    rain.forEach(b => b.y += b.v * dt);
+    rain = rain.filter(b => b.y < H);
+  }
+  markers = markers.filter(m => now - m.t < 900);
+}
+
+function drawFrame() {
+  let k = 0;
+  for (let x = PF.x - 16; x < PF.x + PF.w + 16; x += 16) {
+    block(x, PF.y - 16, 16, COLORS[k++ % 7]);
+    block(x, PF.y + PF.h, 16, COLORS[k++ % 7]);
+  }
+  for (let y = PF.y; y < PF.y + PF.h; y += 16) {
+    block(PF.x - 16, y, 16, COLORS[k++ % 7]);
+    block(PF.x + PF.w, y, 16, COLORS[k++ % 7]);
+  }
+  ctx.fillStyle = '#0a0a1e'; ctx.fillRect(PF.x, PF.y, PF.w, PF.h);
+  ctx.fillStyle = 'rgba(255,255,255,.035)';
+  for (let x = PF.x; x < PF.x + PF.w; x += 16) ctx.fillRect(x, PF.y, 1, PF.h);
+  for (let y = PF.y; y < PF.y + PF.h; y += 16) ctx.fillRect(PF.x, y, PF.w, 1);
+}
+
+function fmtTime(t) {
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+function draw(now) {
+  ctx.save();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  if (now < shakeT) ctx.translate((Math.random() - .5) * 8, (Math.random() - .5) * 8);
+
+  if (scene === 'title' || scene === 'end') {
+    rain.forEach(b => block(b.x, Math.floor(b.y / 4) * 4, 16, b.c));
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(60, 110, 520, 270);
+    const blink = Math.floor(now / 500) % 2 === 0;
+    if (scene === 'title') {
+      text('FIND ME', W / 2, 140, 48, '#f7e026', 'center');
+      text('CLICK THE BUTTON. IF YOU CAN.', W / 2, 220, 12, '#fff', 'center');
+      text(LV.length + ' STAGES - ' + LV.length + ' BROKEN MICE', W / 2, 250, 10, '#33b5e8', 'center');
+      text('ESC: PAUSE   H: HINT (-' + HINT_PENALTY + ' PTS)', W / 2, 275, 10, '#aaa', 'center');
+      text('HI-SCORE ' + String(hi).padStart(6, '0'), W / 2, 300, 10, '#f7a531', 'center');
+      if (blink) text('CLICK TO START', W / 2, 335, 16, '#3bd46a', 'center');
+      // mascot button peeking from the corner, watching the mouse-less void
+      drawButton(mkBtn(284, 400, 72, 30), false, undefined, undefined,
+        { look: [320 + Math.cos(now / 600) * 50, 415 + Math.sin(now / 900) * 50], mood: Math.floor(now / 2500) % 4 === 3 ? 'smug' : 'normal' });
+    } else {
+      const rank = score >= 16000 ? 'S' : score >= 11000 ? 'A' : score >= 7000 ? 'B' : 'C';
+      text('ALL CLEAR!', W / 2, 125, 32, '#f7e026', 'center');
+      text('SCORE ' + String(score).padStart(6, '0'), W / 2, 180, 14, '#fff', 'center');
+      text('TIME  ' + fmtTime(elapsed) + '   MISS ' + misses, W / 2, 208, 10, '#aaa', 'center');
+      text('RANK  ' + rank, W / 2, 240, 24, '#e83b3b', 'center');
+      if (newRecord) { if (blink) text('NEW RECORD!', W / 2, 285, 14, '#f7a531', 'center'); }
+      else text('HI-SCORE ' + String(hi).padStart(6, '0'), W / 2, 285, 10, '#f7a531', 'center');
+      if (blink) text('CLICK TO PLAY AGAIN', W / 2, 335, 14, '#3bd46a', 'center');
+    }
+    ctx.restore();
+    return;
+  }
+
+  // HUD
+  text('STAGE ' + String(li + 1).padStart(2, '0') + '/' + LV.length, 16, 22, 12, '#f7e026');
+  text(L().name, 200, 22, 12, '#33b5e8');
+  text('SC ' + String(score).padStart(6, '0'), 370, 22, 12, '#e83b3b');
+  text(fmtTime(elapsed), 624, 22, 12, '#fff', 'right');
+
+  drawFrame();
+
+  if (scene === 'play') {
+    if (L().drawTarget) L().drawTarget(now);
+    else drawButton(btn, false, undefined, undefined, face());
+  }
+  parts.forEach(p => p.s === 8 ? block(p.x, p.y, 8, p.c) : (ctx.fillStyle = p.c, ctx.fillRect(p.x, p.y, 4, 4)));
+
+  // speech bubble
+  if (bubble && now < bubble.t && scene === 'play') {
+    const r = ghost || bubble.anchor;
+    ctx.font = '8px ' + FONT;
+    const tw = Math.ceil(ctx.measureText(bubble.s).width) + 14;
+    const bx = Math.round(clamp(r.x + r.w / 2 - tw / 2, PF.x + 4, PF.x + PF.w - tw - 4));
+    const above = r.y - 30 > PF.y + 4, by = above ? r.y - 26 : r.y + r.h + 14;
+    const tail = Math.round(r.x + r.w / 2) - 3;
+    ctx.fillStyle = '#000'; ctx.fillRect(bx - 2, by - 2, tw + 4, 22);
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx, by, tw, 18);
+    ctx.fillRect(tail, above ? by + 18 : by - 6, 6, 6);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = bubble.c;
+    ctx.fillText(bubble.s, bx + 7, by + 5);
+  }
+
+  // where clicks actually landed
+  markers.forEach(m => {
+    const a = 1 - (now - m.t) / 900;
+    ctx.fillStyle = `rgba(255,230,40,${a})`;
+    for (let i = -6; i <= 6; i += 2) {
+      ctx.fillRect(m.x + i - 1, m.y + i - 1, 3, 3);
+      ctx.fillRect(m.x + i - 1, m.y - i - 1, 3, 3);
+    }
+  });
+
+  if (now < flashT) { ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(PF.x, PF.y, PF.w, PF.h); }
+  if (now < movedT && scene === 'play') text('IT MOVED!', W / 2, PF.y + 16, 10, '#f7a531', 'center');
+  if (showHint && scene === 'play') text('HINT: ' + L().hint, W / 2, PF.y + PF.h - 28, 8, '#3bd46a', 'center');
+
+  if (scene === 'clear') {
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(PF.x, 190, PF.w, 100);
+    if (Math.floor(now / 150) % 2 === 0) text(popup && popup.perfect ? 'PERFECT!!' : 'STAGE CLEAR!', W / 2, 205, 24, popup && popup.perfect ? '#3bd46a' : '#f7e026', 'center');
+    if (popup) text('+' + popup.gain, W / 2, 250, 16, '#fff', 'center');
+  }
+
+  if (locked) {
+    const p = L().display ? L().display(now) : [vx, vy];
+    if (p) drawCursor(p[0], p[1]);
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(PF.x, PF.y, PF.w, PF.h);
+    text('PAUSED', W / 2, 220, 24, '#f7e026', 'center');
+    text('CLICK TO RESUME', W / 2, 262, 12, '#fff', 'center');
+  }
+  ctx.restore();
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt, now);
+  draw(now);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
