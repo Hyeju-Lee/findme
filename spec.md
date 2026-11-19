@@ -1,11 +1,12 @@
 # FIND ME — 구현 스펙
 
 이 문서는 게임이 **어떻게** 동작하는지 정확히 정의합니다. 왜 이렇게 만드는지는 [PRODUCT.md](PRODUCT.md)를 보세요.
-구현 파일은 [index.html](index.html) 하나입니다. 이 문서와 코드가 다르면 둘 중 하나를 고쳐 맞춥니다.
+구현 파일은 [public/game.html](public/game.html) 하나입니다. 이 문서와 코드가 다르면 둘 중 하나를 고쳐 맞춥니다.
 
 ## 1. 실행 환경
 
-- HTML + CSS + JavaScript, 프레임워크와 빌드 과정 없음
+- 게임 자체는 HTML + CSS + JavaScript 파일 하나이고, 프레임워크나 빌드 과정이 필요 없음
+- 배포: 저장소는 Next.js 앱으로 Vercel에 배포됨. `next.config.ts`의 `beforeFiles` rewrite가 `/` 요청을 `public/game.html`로 보내서, 사이트 첫 화면에서 주소 변경 없이 게임이 열림
 - 데스크톱 브라우저, Pointer Lock API와 Web Audio API 필요
 - 폰트: Press Start 2P (Google Fonts). 불러오지 못하면 `monospace`
 - 외부 이미지나 음원 파일 없음
@@ -191,7 +192,7 @@ PERFECT = levelMisses == 0 ? 500 : 0
 
 ## 10. 조정 값
 
-`index.html` 상단의 상수입니다.
+`public/game.html` 상단의 상수입니다.
 
 | 상수 | 값 | 의미 |
 |---|---|---|
