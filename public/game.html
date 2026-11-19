@@ -32,9 +32,9 @@ const HINT_PENALTY = 300;    // pressing H costs this many points
 const RELOCATE_EVERY = 10;   // button jumps elsewhere every N misses
 const MIN_START_DIST = 180;  // at stage start the cursor (and the real click point) is at least this far from the button
 const DRIFT_FROM = 7;        // buttons start drifting from this stage number
-const DRIFT_SPEED = 20;      // px/s at DRIFT_FROM ...
-const DRIFT_STEP = 6;        // ... plus this much per later stage
-const DRIFT_MAX = 60;        // but never faster than this
+const DRIFT_SPEED = 15;      // px/s at DRIFT_FROM ...
+const DRIFT_STEP = 4;        // ... plus this much per later stage
+const DRIFT_MAX = 45;        // but never faster than this
 
 // ---------- helpers ----------
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -109,7 +109,7 @@ let cursor = { icon: CURSORS[0], scale: 2, fill: '#ffffff' };
 // New random icon and color; size shrinks from ~3.2x at stage 1 to ~1x at the last stage.
 function rollCursor() {
   const t = li / (LV.length - 1);
-  const base = 3.2 - t * 2.2;
+  const base = 3.2 - t * 1.8;
   cursor = { icon: pick(CURSORS), scale: Math.max(0.9, base * rnd(0.85, 1.15)), fill: pick(CURSOR_FILLS) };
 }
 
@@ -223,19 +223,19 @@ const LV = [
 
   { name: 'TURN', hint: 'THE WORLD TURNED 90 DEGREES.',
     setup() { this.s = Math.random() < 0.5 ? 1 : -1; },
-    place() { btn = randBtn(80, 34); },
+    place() { btn = randBtn(96, 38); },
     move(dx, dy) { return [-dy * this.s, dx * this.s]; } },
 
   { name: 'TURBO', hint: 'TINY MOVES. TINY, TINY MOVES.',
-    place() { btn = randBtn(56, 26); },
-    move: (dx, dy) => [dx * 3, dy * 3] },
+    place() { btn = randBtn(64, 30); },
+    move: (dx, dy) => [dx * 2.5, dy * 2.5] },
 
   { name: 'ECHO', hint: 'YOU SEE THE PAST. MOVE, THEN WAIT.',
     setup() { hist = []; },
     place() { btn = randBtn(80, 34); },
     update(dt, now) {
       hist.push({ t: now, x: vx, y: vy });
-      while (hist.length > 1 && hist[1].t <= now - 600) hist.shift();
+      while (hist.length > 1 && hist[1].t <= now - 450) hist.shift();
     },
     display: () => hist.length ? [hist[0].x, hist[0].y] : [vx, vy] },
 
@@ -270,14 +270,14 @@ const LV = [
     setup() { this.t0 = performance.now(); this.dir = Math.random() < 0.5 ? 1 : -1; },
     place() { btn = randBtn(80, 34); },
     hit() {
-      const a = (performance.now() - this.t0) / 8000 * Math.PI * 2 * this.dir;
-      return [vx + Math.cos(a) * 70, vy + Math.sin(a) * 70];
+      const a = (performance.now() - this.t0) / 10000 * Math.PI * 2 * this.dir;
+      return [vx + Math.cos(a) * 60, vy + Math.sin(a) * 60];
     } },
 
   { name: 'BLACKOUT', hint: 'THE LIGHTS FLASH. LEFT IS RIGHT.',
     place() { btn = randBtn(80, 34); },
     move: (dx, dy) => [-dx, dy],
-    display: (now) => (now % 1000) < 400 ? [vx, vy] : null },
+    display: (now) => (now % 1000) < 550 ? [vx, vy] : null },
 
   { name: 'WHICH ONE', hint: 'ONLY ONE IS REAL. THE CENTER IS A MIRROR.', noMove: true,
     place() {
@@ -295,7 +295,7 @@ const LV = [
     drawTarget() { const f = face(); this.list.forEach(b => b.dead ? drawButton(b, true, '#333', '#111') : drawButton(b, false, undefined, undefined, f)); } },
 
   { name: 'SWAP', hint: 'UP IS LEFT. LEFT IS UP.',
-    place() { btn = randBtn(64, 28); },
+    place() { btn = randBtn(80, 34); },
     move: (dx, dy) => [dy, dx] },
 
   { name: 'ICE', hint: 'IT SLIDES. PUSH GENTLY, THEN WAIT.',
@@ -306,7 +306,7 @@ const LV = [
       vx += this.v[0] * dt; vy += this.v[1] * dt;
       if (vx < PF.x || vx > PF.x + PF.w - 1) { this.v[0] *= -0.5; vx = clamp(vx, PF.x, PF.x + PF.w - 1); }
       if (vy < PF.y || vy > PF.y + PF.h - 1) { this.v[1] *= -0.5; vy = clamp(vy, PF.y, PF.y + PF.h - 1); }
-      const k = Math.exp(-2 * dt); this.v[0] *= k; this.v[1] *= k;
+      const k = Math.exp(-2.8 * dt); this.v[0] *= k; this.v[1] *= k;
     } },
 
   { name: 'WIND', hint: 'THE WIND PUSHES YOU. PUSH BACK.',
@@ -315,7 +315,7 @@ const LV = [
     update(dt, now) {
       const k = Math.floor((now - this.t0) / 4000);
       if (k !== this.k) {
-        this.k = k; const a = rnd(0, Math.PI * 2), sp = rnd(50, 80);
+        this.k = k; const a = rnd(0, Math.PI * 2), sp = rnd(35, 60);
         this.w = [Math.cos(a) * sp, Math.sin(a) * sp];
         if (k > 0) beep(160, 0.2, 'triangle', 0.04, 120);
       }
@@ -338,7 +338,7 @@ const LV = [
     place() { btn = randBtn(80, 34); },
     drawTarget() {
       const [hx, hy] = hitPoint(), d = Math.hypot(btn.x + btn.w / 2 - hx, btn.y + btn.h / 2 - hy);
-      ctx.globalAlpha = clamp((d - 50) / 130, 0, 1);      // fully gone within 50px, fully visible beyond 180px
+      ctx.globalAlpha = clamp((d - 35) / 110, 0, 1);      // fully gone within 35px, fully visible beyond 145px
       drawButton(btn, false, undefined, undefined, face());
       ctx.globalAlpha = 1;
     } },
@@ -349,7 +349,7 @@ const LV = [
     move: (dx, dy) => [-dx, dy],
     update(dt, now) {
       hist.push({ t: now, x: vx, y: vy });
-      while (hist.length > 1 && hist[1].t <= now - 700) hist.shift();
+      while (hist.length > 1 && hist[1].t <= now - 500) hist.shift();
     },
     display: () => hist.length ? [hist[0].x, hist[0].y] : [vx, vy] },
 
@@ -357,15 +357,15 @@ const LV = [
     setup() { this.t0 = performance.now(); this.dir = Math.random() < 0.5 ? 1 : -1; },
     place() { btn = randBtn(80, 34); },
     hit() {
-      const a = (performance.now() - this.t0) / 7000 * Math.PI * 2 * this.dir;
-      return [2 * CX - vx + Math.cos(a) * 60, 2 * CY - vy + Math.sin(a) * 60];
+      const a = (performance.now() - this.t0) / 9000 * Math.PI * 2 * this.dir;
+      return [2 * CX - vx + Math.cos(a) * 45, 2 * CY - vy + Math.sin(a) * 45];
     } },
 
-  { name: 'CHAOS', hint: 'THE RULES CHANGE EVERY 5 SECONDS.',
+  { name: 'CHAOS', hint: 'THE RULES CHANGE EVERY 6 SECONDS.',
     setup() { this.t0 = performance.now(); this.seq = shuffle([0, 1, 2, 3]); this.k = -1; this.mode = 0; },
     place() { btn = randBtn(72, 30); },
     update(dt, now) {
-      const k = Math.floor((now - this.t0) / 5000);
+      const k = Math.floor((now - this.t0) / 6000);
       if (k !== this.k) {
         this.k = k; this.mode = this.seq[k % 4];
         if (k > 0) { flashT = now + 150; beep(220, 0.1, 'square', 0.04, 220); }
@@ -376,13 +376,13 @@ const LV = [
   { name: 'FINAL', hint: 'EVERYTHING AT ONCE. GOOD LUCK.',
     driftInset: 100,                                  // keep it away from the walls so the offset click can always reach it
     setup() {
-      const a = rnd(0, Math.PI * 2), r = rnd(60, 80); this.o = [Math.cos(a) * r, Math.sin(a) * r];
+      const a = rnd(0, Math.PI * 2), r = rnd(50, 70); this.o = [Math.cos(a) * r, Math.sin(a) * r];
       this.t0 = performance.now(); this.seq = shuffle([0, 1, 2, 3]); this.k = -1; this.mode = 0;
     },
     place() { btn = randBtn(80, 34); },
     hit() { return [vx + this.o[0], vy + this.o[1]]; },
     update(dt, now) {
-      const k = Math.floor((now - this.t0) / 4000);
+      const k = Math.floor((now - this.t0) / 5000);
       if (k !== this.k) {
         this.k = k; this.mode = this.seq[k % 4];
         if (k > 0) { flashT = now + 150; beep(220, 0.1, 'square', 0.04, 220); }
